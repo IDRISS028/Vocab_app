@@ -83,6 +83,11 @@
     const KEYS = { emmanuel: 'progress_emmanuel', hadja: 'progress_hadja' };
     const loadProgress = (u) => { try { return JSON.parse(localStorage.getItem(KEYS[u]) || '{}'); } catch { return {}; } };
     const saveProgress = (u, p) => localStorage.setItem(KEYS[u], JSON.stringify(p));
+    // Ajout d'une fonction pour reset le localStorage
+    function resetProgress() {
+      Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+      window.location.reload();
+    }
 
     // ── User config ─────────────────────────────────────────────────────────
     const CFG = {
@@ -235,7 +240,7 @@
       const handleScrambleSuccess = () => {
         const next = scrambleStep + 1;
         setScrambleStep(next);
-        if (next >= 3) setTimeout(onLearned, 500);
+        if (next >= 3) setTimeout(() => onLearned('learn'), 500);
       };
 
       return (
@@ -312,7 +317,7 @@
                 {/* Next button (known mode) */}
                 {mode === 'known' && (
                   <div className="px-6 py-4">
-                    <button onClick={onLearned}
+                    <button onClick={() => onLearned('known')}
                       className="w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold hover:bg-gray-200 active:scale-95 transition-all text-base">
                       Mot suivant →
                     </button>
@@ -357,7 +362,7 @@
       const learnedCount = Object.keys(userProgress).length;
 
       const queue = useMemo(
-        () => words.filter(w => !userProgress[w.id]),
+        () => shuffle(words.filter(w => !userProgress[w.id])),
         [words, progress, user]
       );
 
@@ -381,8 +386,8 @@
       }
 
       const handleSkip = () => setIdx(i => (i + 1) % queue.length);
-      const handleLearned = () => {
-        onWordLearned(user, current.id);
+      const handleLearned = (mode) => {
+        onWordLearned(user, current.id, mode);
         setIdx(i => (i >= queue.length - 2 ? 0 : i));
       };
 
@@ -433,9 +438,13 @@
     // ════════════════════════════════════════════════════════════════════════
     function LearnedScreen({ words, progress, onBack }) {
       const [tab, setTab] = useState('emmanuel');
+      const [filter, setFilter] = useState('all'); // all | known | learn
       const wordMap = Object.fromEntries(words.map(w => [w.id, w]));
-      const entries = Object.entries(progress[tab] || {})
+      let entries = Object.entries(progress[tab] || {})
         .sort((a, b) => new Date(b[1].date) - new Date(a[1].date));
+      if (filter !== 'all') {
+        entries = entries.filter(([_, v]) => v.mode === filter);
+      }
 
       return (
         <div className="min-h-screen flex flex-col bg-slate-50">
@@ -445,20 +454,27 @@
             <h1 className="text-lg font-bold text-gray-800">Mots appris</h1>
           </div>
 
-          {/* Tabs */}
-          <div className="flex bg-white border-b border-gray-100 px-5">
-            {['emmanuel', 'hadja'].map(u => {
-              const count = Object.keys(progress[u] || {}).length;
-              return (
-                <button key={u} onClick={() => setTab(u)}
-                  className={`flex-1 py-3 text-sm font-semibold border-b-2 transition-colors ${
-                    tab === u ? CFG[u].tab : 'border-transparent text-gray-400 hover:text-gray-600'
-                  }`}>
-                  {CFG[u].emoji} {CFG[u].label}
-                  <span className="ml-2 text-xs bg-gray-100 rounded-full px-2 py-0.5">{count}</span>
-                </button>
-              );
-            })}
+          {/* Tabs + Filter */}
+          <div className="flex flex-col sm:flex-row bg-white border-b border-gray-100 px-5 gap-2 sm:gap-0">
+            <div className="flex flex-1">
+              {['emmanuel', 'hadja'].map(u => {
+                const count = Object.keys(progress[u] || {}).length;
+                return (
+                  <button key={u} onClick={() => setTab(u)}
+                    className={`flex-1 py-3 text-sm font-semibold border-b-2 transition-colors ${
+                      tab === u ? CFG[u].tab : 'border-transparent text-gray-400 hover:text-gray-600'
+                    }`}>
+                    {CFG[u].emoji} {CFG[u].label}
+                    <span className="ml-2 text-xs bg-gray-100 rounded-full px-2 py-0.5">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex gap-2 py-2 sm:py-0 sm:items-center">
+              <button onClick={() => setFilter('all')} className={`px-3 py-1 rounded-full text-xs font-semibold ${filter === 'all' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-500'}`}>Tous</button>
+              <button onClick={() => setFilter('known')} className={`px-3 py-1 rounded-full text-xs font-semibold ${filter === 'known' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>Je connais</button>
+              <button onClick={() => setFilter('learn')} className={`px-3 py-1 rounded-full text-xs font-semibold ${filter === 'learn' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>J'apprends</button>
+            </div>
           </div>
 
           {/* Cards */}
@@ -468,7 +484,7 @@
                 <p className="text-4xl">📭</p>
                 <p className="text-gray-400">Aucun mot appris pour l'instant.</p>
               </div>
-            ) : entries.map(([id, { date }]) => {
+            ) : entries.map(([id, { date, mode }]) => {
               const w = wordMap[id];
               if (!w) return null;
               const examples = [
@@ -480,7 +496,11 @@
                 <details key={id} className="bg-white rounded-2xl shadow-sm overflow-hidden group">
                   <summary className="p-4 flex justify-between items-center cursor-pointer hover:bg-slate-50 transition-colors">
                     <div>
-                      <p className="font-bold text-gray-800">{w.word}</p>
+                      <p className="font-bold text-gray-800 flex items-center gap-2">
+                        {w.word}
+                        {mode === 'known' && <span className="ml-2 px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs font-semibold">Je connais</span>}
+                        {mode === 'learn' && <span className="ml-2 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">J'apprends</span>}
+                      </p>
                       <p className="text-sm text-gray-500">
                         {w.translation_fr} · <span className="italic">{w.type}</span>
                       </p>
@@ -524,18 +544,50 @@
           .then(r => { if (!r.ok) throw new Error('CSV introuvable — vérifiez le fichier data/toeic_enriched.csv'); return r.text(); })
           .then(text => { setWords(parseCSV(text)); setLoading(false); })
           .catch(e => { setError(e.message); setLoading(false); });
+        // Charger la progression depuis Google Sheets au démarrage
+        loadProgressFromSheet().then(rows => {
+          // rows: [{user, word_id, date, mode}, ...]
+          const prog = { emmanuel: {}, hadja: {} };
+          rows.forEach(r => {
+            if (prog[r.user]) {
+              prog[r.user][r.word_id] = { date: r.date, mode: r.mode };
+            }
+          });
+          setProgress(prog);
+          // Optionnel: save aussi en localStorage pour usage offline
+          saveProgress('emmanuel', prog.emmanuel);
+          saveProgress('hadja', prog.hadja);
+        }).catch(() => {});
       }, []);
 
       const handleSelect = (u) => { setUser(u); setScreen('learn'); };
       const handleLogout = () => { setUser(null); setScreen('home'); };
 
-      const handleWordLearned = (u, id) => {
+      const handleWordLearned = (u, id, mode) => {
         setProgress(prev => {
-          const updated = { ...prev, [u]: { ...prev[u], [id]: { date: new Date().toISOString() } } };
+          const updated = { ...prev, [u]: { ...prev[u], [id]: { date: new Date().toISOString(), mode } } };
           saveProgress(u, updated[u]);
+          // Synchronisation Google Sheets
+          saveProgressToSheet(u, id, new Date().toISOString(), mode);
           return updated;
         });
       };
+
+      // ── Google Sheets Sync (optionnel) ─────────────────────────────────────
+      const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwjpuZnyC55IpxHtN0sREK69_BjkTrbxrtKFN-cdfuN1UFyG9LbrwuhtVNdBgsLlKXaEg/exec';
+
+      async function saveProgressToSheet(user, word_id, date, mode) {
+        await fetch(SHEET_API_URL, {
+          method: 'POST',
+          body: JSON.stringify({ user, word_id, date, mode }),
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      async function loadProgressFromSheet() {
+        const res = await fetch(SHEET_API_URL);
+        return await res.json(); // [{user, word_id, date, mode}, ...]
+      }
 
       if (loading) return (
         <div className="min-h-screen flex flex-col items-center justify-center gap-4">
