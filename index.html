@@ -107,6 +107,141 @@
       },
     };
 
+    // Ajout : calcul des mots à réviser selon la révision espacée
+    function getWordsToReview(words, progress, user) {
+      // Espacement : [1, 3, 7, 14, 30, 60, 120] jours
+      const intervals = [1, 3, 7, 14, 30, 60, 120];
+      const today = new Date();
+      const userProgress = progress[user] || {};
+      return Object.entries(userProgress)
+        .map(([id, data]) => {
+          const w = words.find(w => w.id === id);
+          if (!w) return null;
+          const reviewCount = data.reviewCount || 0;
+          const last = new Date(data.lastReview || data.date);
+          const nextInterval = intervals[Math.min(reviewCount, intervals.length - 1)];
+          const nextReviewDate = new Date(last);
+          nextReviewDate.setDate(last.getDate() + nextInterval);
+          return {
+            ...w,
+            reviewCount,
+            lastReview: data.lastReview || data.date,
+            nextReviewDate,
+            due: today >= nextReviewDate
+          };
+        })
+        .filter(w => w && w.due)
+        .sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
+    }
+
+    // Ajout d'un nouvel écran ReviewScreen (squelette)
+    function ReviewScreen({ words, progress, user, onBack, onUpdateProgress }) {
+      const toReview = getWordsToReview(words, progress, user);
+      const allLearned = words.filter(w => (progress[user] || {})[w.id]);
+      const [step, setStep] = useState(0);
+      const [score, setScore] = useState(0);
+      const [done, setDone] = useState(false);
+
+      const handleResult = (isCorrect) => {
+        if (isCorrect) setScore(s => s + 1);
+        // Mise à jour de la date de révision et du compteur
+        const word = toReview[step];
+        const userProg = { ...progress[user] };
+        userProg[word.id] = {
+          ...userProg[word.id],
+          lastReview: new Date().toISOString(),
+          reviewCount: (userProg[word.id].reviewCount || 0) + 1
+        };
+        onUpdateProgress(prev => ({ ...prev, [user]: userProg }));
+        if (step < toReview.length - 1) setStep(s => s + 1);
+        else setDone(true);
+      };
+
+      if (toReview.length === 0) return (
+        <div className="min-h-screen flex flex-col bg-slate-50">
+          <div className="flex items-center gap-3 px-5 py-4 bg-white shadow-sm sticky top-0 z-10">
+            <button onClick={onBack} className="text-gray-400 hover:text-gray-600 text-xl">←</button>
+            <h1 className="text-lg font-bold text-gray-800">Révision</h1>
+          </div>
+          <div className="flex-1 flex flex-col items-center justify-center">
+            <div className="text-center space-y-2">
+              <p className="text-4xl">🎉</p>
+              <p className="text-gray-500">Aucun mot à réviser aujourd'hui !</p>
+            </div>
+          </div>
+        </div>
+      );
+
+      if (done) return (
+        <div className="min-h-screen flex flex-col bg-slate-50 items-center justify-center">
+          <div className="text-5xl mb-4">👏</div>
+          <div className="text-2xl font-bold text-gray-800 mb-2">Révision terminée !</div>
+          <div className="text-lg text-gray-600 mb-6">Score : {score} / {toReview.length}</div>
+          <button onClick={onBack} className="px-6 py-3 rounded-2xl bg-indigo-600 text-white font-bold text-lg shadow-lg hover:bg-indigo-700 transition-all">Retour</button>
+        </div>
+      );
+
+      return (
+        <div className="min-h-screen flex flex-col bg-slate-50">
+          <div className="flex items-center gap-3 px-5 py-4 bg-white shadow-sm sticky top-0 z-10">
+            <button onClick={onBack} className="text-gray-400 hover:text-gray-600 text-xl">←</button>
+            <h1 className="text-lg font-bold text-gray-800">Révision</h1>
+            <span className="ml-auto text-sm text-gray-500">{step + 1} / {toReview.length}</span>
+          </div>
+          <div className="flex-1 flex flex-col items-center justify-center">
+            <ReviewQCM word={toReview[step]} allLearned={allLearned} onResult={handleResult} />
+          </div>
+        </div>
+      );
+    }
+
+    // Composant QCM pour la révision d'un mot
+    function ReviewQCM({ word, allLearned, onResult }) {
+      // Génère 5 mauvaises traductions aléatoires parmi les mots appris (hors mot courant)
+      const wrongChoices = useMemo(() => {
+        const pool = allLearned.filter(w => w.id !== word.id && w.translation_fr && w.translation_fr !== word.translation_fr);
+        return shuffle(pool).slice(0, 5).map(w => w.translation_fr);
+      }, [allLearned, word]);
+      // Mélange la bonne réponse avec les mauvaises
+      const options = useMemo(() => shuffle([word.translation_fr, ...wrongChoices]), [word, wrongChoices]);
+      const [selected, setSelected] = useState(null);
+      const [status, setStatus] = useState(null); // null | 'correct' | 'wrong'
+
+      const handleSelect = (opt) => {
+        setSelected(opt);
+        if (opt === word.translation_fr) {
+          setStatus('correct');
+          setTimeout(() => onResult(true), 700);
+        } else {
+          setStatus('wrong');
+          setTimeout(() => onResult(false), 1200);
+        }
+      };
+
+      return (
+        <div className="max-w-md mx-auto bg-white rounded-3xl shadow-xl p-8 flex flex-col items-center gap-6">
+          <div className="text-2xl font-extrabold text-gray-800 tracking-tight">{word.word}</div>
+          <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+            {options.map((opt, i) => (
+              <button key={i} onClick={() => handleSelect(opt)}
+                disabled={!!status}
+                className={`py-3 rounded-2xl font-semibold text-base border transition-all
+                  ${selected === opt && status === 'correct' ? 'bg-green-100 border-green-400 text-green-700' :
+                    selected === opt && status === 'wrong' ? 'bg-red-100 border-red-400 text-red-700' :
+                    'bg-gray-50 border-gray-200 text-gray-700 hover:bg-indigo-50 hover:border-indigo-300'}
+                `}>
+                {opt}
+              </button>
+            ))}
+          </div>
+          {status === 'correct' && <div className="text-green-600 font-bold mt-2">✅ Bravo !</div>}
+          {status === 'wrong' && <div className="text-red-500 font-bold mt-2">❌ Mauvaise réponse</div>}
+        </div>
+      );
+    }
+
+    ;
+
     // ════════════════════════════════════════════════════════════════════════
     // SCRAMBLE LEVEL
     // ════════════════════════════════════════════════════════════════════════
@@ -123,6 +258,7 @@
       const [answer, setAnswer] = useState([]);
       const [status, setStatus] = useState('idle'); // idle | correct | wrong | revealed
       const [errors, setErrors] = useState(0);
+      const [tipShown, setTipShown] = useState(false);
 
       const pick = (i) => {
         if (status === 'correct') return;
@@ -145,7 +281,10 @@
         } else {
           const next = errors + 1;
           setErrors(next);
-          if (next >= 3) {
+          if (!tipShown && next >= 3) {
+            setTipShown(true);
+            setStatus('tip');
+          } else if (tipShown && next >= 6) {
             setStatus('revealed');
           } else {
             setStatus('wrong');
@@ -159,6 +298,12 @@
                         : status === 'wrong'    ? 'border-red-400 bg-red-50'
                         : status === 'revealed' ? 'border-amber-400 bg-amber-50'
                         : 'border-gray-200 bg-gray-50';
+      
+      let tipCount = 0;
+     if (level === 'easy') tipCount = 3;
+     else if (level === 'medium') tipCount = 5;
+     else if (level === 'hard') tipCount = 6;
+     const tipWords = correctAnswer.split(' ').slice(0, tipCount).join(' ');
 
       return (
         <div className="space-y-3">
@@ -187,7 +332,14 @@
 
           {/* Feedback */}
           {status === 'correct'  && <p className="text-green-600 font-semibold text-center text-sm">✅ Parfait !</p>}
-          {status === 'wrong'    && <p className="text-red-500 font-semibold text-center text-sm">❌ Pas tout à fait, réessaie ! ({3 - errors} essai{3 - errors > 1 ? 's' : ''} restant{3 - errors > 1 ? 's' : ''})</p>}
+          {status === 'wrong'    && <p className="text-red-500 font-semibold text-center text-sm">❌ Pas tout à fait, réessaie ! ({3 - (errors % 3)} essai{3 - (errors % 3) > 1 ? 's' : ''} restant{3 - (errors % 3) > 1 ? 's' : ''})</p>}
+          {status === 'tip' && (
+            <div className="space-y-2">
+              <p className="text-amber-600 font-semibold text-center text-sm">💡 Astuce : Commence par…</p>
+              <p className="text-center text-gray-800 font-medium bg-amber-100 rounded-xl p-3 text-sm leading-relaxed">{tipWords}</p>
+              <button onClick={() => setStatus('idle')} className="w-full py-2 rounded-xl bg-amber-500 text-white font-semibold text-sm hover:bg-amber-600 transition-colors">OK, je réessaie</button>
+            </div>
+          )}
           {status === 'revealed' && (
             <div className="space-y-2">
               <p className="text-amber-600 font-semibold text-center text-sm">💡 Voici la bonne réponse :</p>
@@ -215,6 +367,8 @@
         </div>
       );
     }
+
+    ;
 
     // ════════════════════════════════════════════════════════════════════════
     // FLIP CARD
@@ -356,7 +510,7 @@
     // ════════════════════════════════════════════════════════════════════════
     // LEARN SCREEN
     // ════════════════════════════════════════════════════════════════════════
-    function LearnScreen({ words, user, progress, onWordLearned, onGoLearned, onLogout }) {
+    function LearnScreen({ words, user, progress, onWordLearned, onGoLearned, onLogout, onGoReview }) {
       const cfg = CFG[user];
       const userProgress = progress[user] || {};
       const learnedCount = Object.keys(userProgress).length;
@@ -401,9 +555,12 @@
             <span className={`text-sm font-bold px-3 py-1 rounded-full ${cfg.badge}`}>
               {cfg.emoji} {cfg.label}
             </span>
-            <button onClick={onGoLearned} className="text-sm text-indigo-600 hover:text-indigo-800 font-semibold">
-              Mes mots →
-            </button>
+            <div className="flex gap-2">
+              <button onClick={onGoReview} className="text-sm text-indigo-600 hover:text-indigo-800 font-semibold border border-indigo-200 rounded-full px-3 py-1 bg-indigo-50">🔁 Révision</button>
+              <button onClick={onGoLearned} className="text-sm text-indigo-600 hover:text-indigo-800 font-semibold">
+                Mes mots →
+              </button>
+            </div>
           </div>
 
           {/* Progress */}
@@ -538,6 +695,7 @@
         emmanuel: loadProgress('emmanuel'),
         hadja:    loadProgress('hadja'),
       });
+      const [reviewUser, setReviewUser] = useState(null);
 
       useEffect(() => {
         fetch('data/toeic_enriched.csv')
@@ -578,6 +736,25 @@
       );
 
       if (screen === 'home')    return <HomeScreen onSelect={handleSelect} />;
+      if (screen === 'reviewUser') return (
+        <div className="min-h-screen flex flex-col items-center justify-center gap-10 px-6 bg-gradient-to-br from-slate-100 to-slate-200">
+          <div className="text-center space-y-3">
+            <div className="text-6xl">🔁</div>
+            <h1 className="text-4xl font-extrabold text-gray-800 tracking-tight">Révision</h1>
+            <p className="text-gray-500 text-lg">Pour quel utilisateur ?</p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-4 w-full max-w-xs">
+            {['emmanuel', 'hadja'].map(u => (
+              <button key={u} onClick={() => { setReviewUser(u); setScreen('review'); }}
+                className={`flex-1 py-6 rounded-3xl text-white text-xl font-bold shadow-xl active:scale-95 transition-all bg-gradient-to-br ${CFG[u].homeBg}`}>
+                {CFG[u].emoji} {CFG[u].label}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setScreen('home')} className="text-gray-400 hover:text-gray-600 text-sm underline mt-8">Retour</button>
+        </div>
+      );
+      if (screen === 'review') return <ReviewScreen words={words} progress={progress} user={reviewUser} onBack={() => setScreen(user ? 'learn' : 'home')} onUpdateProgress={setProgress} />;
       if (screen === 'learned') return <LearnedScreen words={words} progress={progress} onBack={() => setScreen('learn')} />;
       return (
         <LearnScreen
@@ -587,6 +764,7 @@
           onWordLearned={handleWordLearned}
           onGoLearned={() => setScreen('learned')}
           onLogout={handleLogout}
+          onGoReview={() => { setReviewUser(user); setScreen('review'); }}
         />
       );
     }
