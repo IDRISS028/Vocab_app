@@ -544,20 +544,6 @@
           .then(r => { if (!r.ok) throw new Error('CSV introuvable — vérifiez le fichier data/toeic_enriched.csv'); return r.text(); })
           .then(text => { setWords(parseCSV(text)); setLoading(false); })
           .catch(e => { setError(e.message); setLoading(false); });
-        // Charger la progression depuis Google Sheets au démarrage
-        loadProgressFromSheet().then(rows => {
-          // rows: [{user, word_id, date, mode}, ...]
-          const prog = { emmanuel: {}, hadja: {} };
-          rows.forEach(r => {
-            if (prog[r.user]) {
-              prog[r.user][r.word_id] = { date: r.date, mode: r.mode };
-            }
-          });
-          setProgress(prog);
-          // Optionnel: save aussi en localStorage pour usage offline
-          saveProgress('emmanuel', prog.emmanuel);
-          saveProgress('hadja', prog.hadja);
-        }).catch(() => {});
       }, []);
 
       const handleSelect = (u) => { setUser(u); setScreen('learn'); };
@@ -567,27 +553,9 @@
         setProgress(prev => {
           const updated = { ...prev, [u]: { ...prev[u], [id]: { date: new Date().toISOString(), mode } } };
           saveProgress(u, updated[u]);
-          // Synchronisation Google Sheets
-          saveProgressToSheet(u, id, new Date().toISOString(), mode);
           return updated;
         });
       };
-
-      // ── Google Sheets Sync (optionnel) ─────────────────────────────────────
-      const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbwjpuZnyC55IpxHtN0sREK69_BjkTrbxrtKFN-cdfuN1UFyG9LbrwuhtVNdBgsLlKXaEg/exec';
-
-      async function saveProgressToSheet(user, word_id, date, mode) {
-        await fetch(SHEET_API_URL, {
-          method: 'POST',
-          body: JSON.stringify({ user, word_id, date, mode }),
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      async function loadProgressFromSheet() {
-        const res = await fetch(SHEET_API_URL);
-        return await res.json(); // [{user, word_id, date, mode}, ...]
-      }
 
       if (loading) return (
         <div className="min-h-screen flex flex-col items-center justify-center gap-4">
